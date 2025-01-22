@@ -1,0 +1,264 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Set the LCD I2C address and dimensions (16 columns, 2 rows)
+#define I2C_ADDR 0x27
+#define LCD_COLUMNS 16
+#define LCD_ROWS 2
+
+void call_buzzer(int, int, int, int, int);
+void clear_display(int x, int y);
+int read_button();
+void display(int , int , const char* ) ;
+
+// Initialize the LiquidCrystal_I2C object
+LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLUMNS, LCD_ROWS);
+
+
+
+#define UP_BUTTON_PIN 15     // Define pin for the Up button (D15)
+#define DOWN_BUTTON_PIN 19   // Define pin for the Down button (D19)
+#define ENTER_BUTTON_PIN 18  // Define pin for the Enter button (D18)
+#define BUZZER_PIN 32  // Define the buzzer pin
+
+
+
+unsigned long buttonPressTime = 0;  // Variable to store the press time of a button
+int upButtonCounter = 0; // Counter for up button press time
+int downButtonCounter = 0; // Counter for down button press time
+int enterButtonCounter = 0; // Counter for enter button press time
+
+bool upButtonState = false;
+bool downButtonState = false;
+bool enterButtonState = false;
+
+bool longPressDetected = false; // Flag to prevent detecting long press after short
+
+float p = 0.0;
+
+void setup() {
+    Serial.begin(9600);  // Start serial communication
+    lcd.init();
+    lcd.backlight();
+    pinMode(UP_BUTTON_PIN, INPUT);    // Set UP button pin as input with pull-up resistor
+    pinMode(DOWN_BUTTON_PIN, INPUT);  // Set DOWN button pin as input with pull-up resistor
+    pinMode(ENTER_BUTTON_PIN, INPUT); // Set ENTER button pin as input with pull-up resistor
+       pinMode(BUZZER_PIN, OUTPUT); // Set the buzzer pin as output
+    digitalWrite(BUZZER_PIN, LOW); // Ensure the buzzer is off initially
+}
+
+void loop() {
+   
+
+///float x = read_value();
+//char buffer[16];
+//sprintf(buffer,"=T1=%.1f",x);
+//display(2,2,buffer);
+    //float temperatures[] = {25.5, 30.2, 27.8}; // Example temperature readings
+
+//char buffer[16]; // Buffer to hold the formatted string
+//sprintf(buffer, "t1=%.2f", temperatures[0]); // Format the string with the temperature
+
+//display(4, 4, buffer); // Pass the formatted string to display in the fourth quadrant
+   int buttonPressed = read_button(); // Read button status
+     
+   if (buttonPressed == 1) {
+       clear_display(4,1);
+        display(4,1,"Enter");
+        //delay(5000);
+    }
+    if(buttonPressed == 2)
+     {
+      clear_display(4,2);
+      display(4,2,"down");
+     }
+    if(buttonPressed ==3)
+    {
+      clear_display(4,3);
+      display(4,3,"UP");
+    }
+    if(buttonPressed ==4)
+    {
+      clear_display(4,1);
+      display(4,1,"BACK");
+    }
+    if(buttonPressed ==5)
+    {
+      clear_display(4,2);
+      display(4,2,"clear");
+    }
+    if(buttonPressed ==6)
+    {
+      clear_display(4,3);
+      display(4,3,"accept");
+    }
+    
+    
+}
+
+// Function to read the status of the buttons
+int read_button() {
+    int buttonState = 0; // Default no button pressed
+
+    // Read the state of each button (pressed HIGH due to INPUT_PULLUP)
+    upButtonState = digitalRead(UP_BUTTON_PIN) == HIGH;
+    downButtonState = digitalRead(DOWN_BUTTON_PIN) == HIGH;
+    enterButtonState = digitalRead(ENTER_BUTTON_PIN) == HIGH;
+
+    // Check for up button
+    if (upButtonState) {
+        upButtonCounter++;  // Increment counter when button is pressed
+        if (upButtonCounter > 500000 && !longPressDetected) {
+            // Call the buzzer function when counter exceeds 500000
+            Serial.println("Buzzer called for Up button (long press)");
+           // call_buzzer(1,100,100,1,0);
+            upButtonCounter = 0;  // Reset counter after calling the buzzer
+            buttonState = 6;  // Long press for Up button
+            longPressDetected = true;  // Prevent further long press detection
+        }
+    } else if (upButtonCounter > 0) {  // If button released and counter > 0
+        if (upButtonCounter < 500000 && !longPressDetected) {
+            buttonState = 3;  // Up button (short press)
+            upButtonCounter = 0;  // Reset the counter after processing
+        }
+    }
+
+    // Check for down button
+    if (downButtonState) {
+        downButtonCounter++;  // Increment counter when button is pressed
+        if (downButtonCounter > 500000 && !longPressDetected) {
+            // Call the buzzer function when counter exceeds 500000
+            Serial.println("Buzzer called for Down button (long press)");
+            //call_buzzer(1,100,100,1,0);
+            downButtonCounter = 0;  // Reset counter after calling the buzzer
+            buttonState = 5;  // Long press for Down button
+            longPressDetected = true;  // Prevent further long press detection
+        }
+    } else if (downButtonCounter > 0) {  // If button released and counter > 0
+        if (downButtonCounter < 500000 && !longPressDetected) {
+            buttonState = 2;  // Down button (short press)
+            downButtonCounter = 0;  // Reset the counter after processing
+        }
+    }
+
+    // Check for enter button
+    if (enterButtonState) {
+        enterButtonCounter++;  // Increment counter when button is pressed
+        if (enterButtonCounter > 500000 && !longPressDetected) {
+            // Call the buzzer function when counter exceeds 500000
+            Serial.println("Buzzer called for Enter button (long press)");
+           // call_buzzer(1,100,100,1,0);
+            enterButtonCounter = 0;  // Reset counter after calling the buzzer
+            buttonState = 4;  // Long press for Enter button
+            longPressDetected = true;  // Prevent further long press detection
+        }
+    } else if (enterButtonCounter > 0) {  // If button released and counter > 0
+        if (enterButtonCounter < 500000 && !longPressDetected) {
+            buttonState = 1;  // Enter button (short press)
+            enterButtonCounter = 0;  // Reset the counter after processing
+        }
+    }
+
+    // Reset long press detection after a short press
+    if (longPressDetected) {
+
+
+
+
+        //delay(2000);  // Small delay to block immediate detection of both short and long press
+        delay(500);
+        call_buzzer(1,100,100,1,0);
+
+
+
+
+
+        longPressDetected = false;  // Reset long press flag
+    }
+
+    return buttonState; // Return the detected button state
+} //-- in this code everything is running fine i do
+// Function to display a message in a specified section of the display
+void display(int x, int y, const char* z) {
+    if (x <= 0 || y <= 0) {
+        Serial.println("Error: Invalid number of sections or quadrant");
+        return;
+    }
+
+    int totalSections = x;               // Total sections/quadrants
+    int sectionWidth = LCD_COLUMNS / (x / 2); // Width of each section (x/2 quadrants per row)
+    int sectionHeight = LCD_ROWS / 2;    // Height of each section (always 1 row per quadrant)
+
+    if ((x % 2 != 0) || (LCD_COLUMNS % (x / 2) != 0)) {
+        Serial.println("Warning: Sections do not divide evenly. Output may be misaligned.");
+    }
+
+    // Determine the row and column for the selected section
+    int sectionIndex = y - 1;                  // Zero-based index for the section
+    int startColumn = (sectionIndex % (x / 2)) * sectionWidth; // Horizontal position
+    int startRow = (sectionIndex / (x / 2));   // Vertical position
+
+    // Check if the selected quadrant is valid
+    if (startRow >= LCD_ROWS || startColumn >= LCD_COLUMNS) {
+        Serial.println("Error: Quadrant out of range");
+        return;
+    }
+
+    // Clear the section
+    lcd.setCursor(startColumn, startRow);
+    for (int i = 0; i < sectionWidth; i++) {
+        lcd.print(" ");
+    }
+
+    // Print the message within the section
+    lcd.setCursor(startColumn, startRow);
+    lcd.print(z);
+}
+
+// Function to clear the display or a specific section
+void clear_display(int x = -1, int y = -1) {
+    if (x == -1 && y == -1) {
+        lcd.clear(); // Clear the whole display
+    } else if (x > 0 && y > 0) {
+        int totalSections = x;               // Total sections/quadrants
+        int sectionWidth = LCD_COLUMNS / (x / 2); // Width of each section
+        int sectionHeight = LCD_ROWS / 2;    // Height of each section
+
+        if ((x % 2 != 0) || (LCD_COLUMNS % (x / 2) != 0)) {
+            Serial.println("Warning: Sections do not divide evenly. Output may be misaligned.");
+        }
+
+        // Determine the row and column for the selected section
+        int sectionIndex = y - 1;                  // Zero-based index for the section
+        int startColumn = (sectionIndex % (x / 2)) * sectionWidth; // Horizontal position
+        int startRow = (sectionIndex / (x / 2));   // Vertical position
+
+        // Check if the selected quadrant is valid
+        if (startRow >= LCD_ROWS || startColumn >= LCD_COLUMNS) {
+            Serial.println("Error: Quadrant out of range");
+            return;
+        }
+
+        // Clear the section
+        lcd.setCursor(startColumn, startRow);
+        for (int i = 0; i < sectionWidth; i++) {
+            lcd.print(" ");
+        }
+    } else {
+        Serial.println("Error: Invalid arguments for clear_display");
+    }
+}
+// Function to make the buzzer beep 'beepCount' times with specified HIGH and LOW times,
+// repeated 'repeatCount' times, with 'sequenceDelay' between sequences
+void call_buzzer(int beepCount, int highTime, int lowTime, int repeatCount, int sequenceDelay) {
+    for (int r = 0; r < repeatCount; r++) {  // Repeat the sequence 'repeatCount' times
+        for (int i = 0; i < beepCount; i++) {  // Beep 'beepCount' times
+            digitalWrite(BUZZER_PIN, HIGH);  // Turn buzzer ON
+            delay(highTime);                 // Wait for HIGH time
+            digitalWrite(BUZZER_PIN, LOW);   // Turn buzzer OFF
+            delay(lowTime);                  // Wait for LOW time
+        }
+        delay(sequenceDelay);  // Wait for 'sequenceDelay' ms after each full sequence
+    }
+}
+
