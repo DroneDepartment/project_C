@@ -2,6 +2,15 @@
 #include <LiquidCrystal_I2C.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <EEPROM.h>
+
+#define EEPROM_SIZE 512  // Define EEPROM size
+#define TEMP_ADDR 0      // Start address for tempValue
+#define RISE_ADDR 10     // Start address for riseTime
+#define HOLD_ADDR 20     // Start address for holdTime
+#define FALL_ADDR 30     // Start address for fallTime
+
+
 
 // Set the LCD I2C address and dimensions (16 columns, 2 rows)
 #define I2C_ADDR 0x27
@@ -21,13 +30,24 @@ int showMenu(const char* title, const char* options[], int total_options);
 float* read_temperature();
 void showMenu();
 void displayPage(int currentPage, int selectedItem, const char *menuItems[], int itemsPerPage);
+void loadFromEEPROM();
+void saveToEEPROM() ;
+int displayCuringParameters(int finalTemp, int riseTime, int holdTime, int fallTime);
+void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime);
+bool read_temperature_non_blocking();
 
 
 // Initialize the LiquidCrystal_I2C object
 LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLUMNS, LCD_ROWS);
 
 
-
+const int heaterPin = 33; // Heater pin
+const int fanPin = 25;
+//unsigned long previousMillis = 0;
+//const int heaterPin = 33; // Heater pin
+unsigned long previousMillis = 0;
+unsigned long lastDisplayUpdate = 0;
+unsigned long lastTargetDisplay = 0;
 
 
 #define UP_BUTTON_PIN 15     // Define pin for the Up button (D15)
@@ -63,11 +83,18 @@ const char *menuItems[] = {
   "6.Continue"
 };
 
-// Global variables to store the values from the menu
+/*/ Global variables to store the values from the menu
 float tempValue = 0.0;
 float riseTime = 0.0;
 float holdTime = 0.0;
 float fallTime = 0.0;
+*/
+
+// Global variables to store the values from the menu
+int tempValue = 0;
+int riseTime = 0;
+int holdTime = 0;
+int fallTime = 0;
 
 
 const int menuSize = 6; // Total number of menu items
@@ -106,7 +133,9 @@ unsigned long up_press_time = 0;
 float p = 0.0;
 
 void setup() {
-    Serial.begin(9600);  // Start serial communication
+  Serial.begin(9600);  // Start serial communication
+  //saveToEEPROM();    // Save data to EEPROM
+  loadFromEEPROM();  // Load data to verify
     lcd.init();
     lcd.backlight();
     pinMode(UP_BUTTON_PIN, INPUT);    // Set UP button pin as input with pull-up resistor
@@ -114,6 +143,11 @@ void setup() {
     pinMode(ENTER_BUTTON_PIN, INPUT); // Set ENTER button pin as input with pull-up resistor
        pinMode(BUZZER_PIN, OUTPUT); // Set the buzzer pin as output
     digitalWrite(BUZZER_PIN, LOW); // Ensure the buzzer is off initially
+      pinMode(heaterPin, OUTPUT);
+  digitalWrite(heaterPin, LOW); // Turn off the heater initially
+   pinMode(fanPin, OUTPUT);
+  digitalWrite(fanPin, LOW); // Turn off the heater initially
+
 
 }
 
@@ -143,8 +177,15 @@ void loop() {
         if (state3_1_reply == 1) {
             // Clear the display and show the first part of the message
             clear_display(-1, -1);
+            lcd.print("starting now...");
+            delay(1000);
+            int apple =displayCuringParameters(100,60,240,60);
+          if(apple == 4)
+          {
+            lcd.clear();
             lcd.setCursor(0, 0);
             lcd.print("Starting curing");  // First row fixed text
+            //delay(1000);
 
             // Start countdown in the second row
             for (int i = 3; i >= 1; i--) {
@@ -156,26 +197,39 @@ void loop() {
             }
 
             // After countdown finishes, display "Started" message
-            clear_display(-1, -1);
-            lcd.setCursor(0, 0);
-            lcd.print("Starting curing");
-            lcd.setCursor(0, 1);
-            clear_display(-1,-1);
-            lcd.print("Process Started!");  // Message after countdown
+            
+
+            controlTemperature(100,60,240,60);
+            lcd.print("Process completed!");  // Message after countdown
             delay(2000); // Show "Started" message for 2 seconds
-        } else if (state3_1_reply == 2) {
+            //lcd.print("curing started");
+           // delay(5000);
+           break;
+          }
+          if(apple == 6)
+          {
+            lcd.clear();
+            lcd.print("returning");
+            delay(2000);
+            break;
+          }
+        }
+            
+         else if (state3_1_reply == 2) {
             clear_display(-1, -1);
             lcd.print("Custom Mode");
             delay(2000);
-            float finalValue = read_value("enter temp"); // Call the read_value function
-            clear_display(-1, -1);
-            if(finalValue== -1)
-            {
-            lcd.print("returning...");
-            delay(5000);
+            //float finalValue = read_value("enter temp"); // Call the read_value function
+            //clear_display(-1, -1);
+            //if(read_button()== 6)
+            //{
+            //lcd.print("returning...");
+            //delay(2000);
+            //break;
+            
             showMenu();
-            }
-        } else if (state3_1_reply == 3) {
+        }
+         else if (state3_1_reply == 3) {
             break;
         }
     }
@@ -228,8 +282,176 @@ void loop() {
 }
 
 
+void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
+  enum State { RISE, HOLD, FALL, COMPLETE };
+  State currentState = RISE;
 
+  unsigned long stateStartMillis = millis();
+  unsigned long elapsedMillis = 0;
+  unsigned long lastDisplayUpdate = 0;
+  bool isPaused = false;
 
+  // Wait for the first temperature reading to be ready
+  while (!read_temperature_non_blocking()) {
+    delay(10); // Give some time for the sensor to update the results
+  }
+
+  // Now, safely retrieve the initial temperature from results[0]
+  float initialTemp = results[0];  // Get the current temperature from the sensor (results[0] should be set correctly now)
+  float targetTemp = initialTemp;  // Start the target temperature from the current temperature
+  
+  Serial.print("Initial Temp: ");
+  Serial.println(initialTemp);
+
+  digitalWrite(heaterPin, LOW);    // Heater initially off
+  digitalWrite(fanPin, HIGH);      // Fan on initially (if required)
+  lcd.clear();
+  lcd.print("RISE");
+  call_buzzer(1, 300, 300, 4, 1); // Indicate start of RISE state
+
+  while (currentState != COMPLETE) {
+    // Handle button inputs
+    int buttonState = read_button();
+    if (buttonState == 6) {
+      // Exit the function
+      lcd.clear();
+      lcd.print("Terminating...");
+      delay(2000);
+      lcd.clear();
+      return;
+    } else if (buttonState == 5) {
+      // Pause the process
+      isPaused = true;
+      digitalWrite(heaterPin, LOW); // Turn off heater during pause
+      digitalWrite(fanPin, LOW);    // Optionally turn off fan
+      lcd.clear();
+      lcd.print("Paused...");
+      while (isPaused) {
+        if (read_button() == 4) {
+          // Resume the process
+          isPaused = false;
+          stateStartMillis = millis() - elapsedMillis; // Adjust start time
+          lcd.clear();
+          lcd.print("Resuming...");
+          delay(1000);
+          lcd.clear();
+        } else if (read_button() == 6) {
+          // Exit if button 6 is pressed during pause
+          lcd.clear();
+          lcd.print("Terminating...");
+          delay(2000);
+          lcd.clear();
+          return;
+        }
+      }
+    }
+
+    // Get the elapsed time in the current state
+    elapsedMillis = millis() - stateStartMillis;
+    int elapsedSeconds = elapsedMillis / 1000;
+    int elapsedMinutes = elapsedSeconds / 60;
+    elapsedSeconds %= 60;
+    elapsedMinutes %= 60;
+
+    // State handling
+    switch (currentState) {
+      case RISE: {
+        // Calculate the target temperature based on elapsed time in the RISE state
+        float progress = (float)elapsedMillis / (riseTime * 60 * 1000); // Progress from 0 to 1
+        targetTemp = initialTemp + progress * (maxTemp - initialTemp); // Increase from initial to maxTemp
+Serial.print("targetTemp: ");
+  Serial.println(targetTemp);
+  Serial.print("actualTemp: ");
+  Serial.println(results[0]);
+
+        if (elapsedMillis >= riseTime * 60 * 1000) {
+          currentState = HOLD;
+          call_buzzer(1, 200, 200, 4, 1);
+          targetTemp = maxTemp; // Maintain max temperature during HOLD
+          stateStartMillis = millis();
+        }
+        break;
+      }
+
+      case HOLD:
+        targetTemp = maxTemp; // Maintain max temperature
+        if (elapsedMillis >= holdTime * 60 * 1000) {
+          currentState = FALL;
+          call_buzzer(1, 300, 300, 4, 3);
+          stateStartMillis = millis();
+        }
+        break;
+
+      case FALL: {
+        // Calculate the target temperature during the FALL state
+        float progress = (float)elapsedMillis / (fallTime * 60 * 1000); // Progress from 0 to 1
+        targetTemp = maxTemp - progress * (maxTemp - initialTemp); // Decrease back to initialTemp
+
+        if (elapsedMillis >= fallTime * 60 * 1000) {
+          currentState = COMPLETE;
+          call_buzzer(1, 300, 300, 4, 4);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+
+    // Simulate temperature using the sensor readings
+    if (read_temperature_non_blocking()) { // Non-blocking temperature reading
+      if (results[0] < targetTemp) {
+        digitalWrite(heaterPin, HIGH); // Heater on
+      } else if (results[0] > targetTemp) {
+        digitalWrite(heaterPin, LOW); // Heater off
+      }
+    }
+
+    // Update display periodically
+    if (millis() - lastDisplayUpdate >= 250) {
+      lastDisplayUpdate = millis();
+
+      lcd.setCursor(0, 0);
+      lcd.print("T1=");
+      lcd.print((int)results[1]); // Display T1
+      lcd.print((char)0xDF);
+      lcd.print("C ");
+
+      lcd.setCursor(8, 0);
+      lcd.print("T2=");
+      lcd.print((int)results[2]); // Display T2
+      lcd.print((char)0xDF);
+      lcd.print("C");
+
+      lcd.setCursor(0, 1);
+      if (currentState == RISE) {
+        lcd.print("RISE");
+      } else if (currentState == HOLD) {
+        lcd.print("HOLD");
+      } else if (currentState == FALL) {
+        lcd.print("FALL");
+      }
+      lcd.print("   ");
+
+      lcd.setCursor(5, 1);
+      if (digitalRead(heaterPin) == HIGH) {
+        lcd.print("H ");
+      } else {
+        lcd.print("  ");
+      }
+
+      lcd.setCursor(7, 1);
+      lcd.print(elapsedMinutes);
+      lcd.print(":");
+      if (elapsedSeconds < 10) lcd.print("0");
+      lcd.print(elapsedSeconds);
+    }
+  }
+
+  // Turn off heater and fan after completion
+  digitalWrite(heaterPin, LOW);
+  digitalWrite(fanPin, LOW);
+}
 
 
 void showMenu() {
@@ -264,15 +486,19 @@ void showMenu() {
         // Action based on selected menu item
         if (selectedItem == 0) {  // Temp
           tempValue = read_value("Enter Temp:");
+          saveToEEPROM();
           updateMenuDisplay(0);  // Refresh the Temp menu item
         } else if (selectedItem == 1) {  // Rise Time
           riseTime = read_value("Enter Rise Time:");
+          saveToEEPROM();
           updateMenuDisplay(1);  // Refresh the Rise Time menu item
         } else if (selectedItem == 2) {  // Hold Time
           holdTime = read_value("Enter Hold Time:");
+          saveToEEPROM();
           updateMenuDisplay(2);  // Refresh the Hold Time menu item
         } else if (selectedItem == 3) {  // Fall Time
           fallTime = read_value("Enter Fall Time:");
+          saveToEEPROM();
           updateMenuDisplay(3);  // Refresh the Fall Time menu item
         } else if (selectedItem == 4) {  // Return
           lcd.clear();
@@ -282,13 +508,167 @@ void showMenu() {
         } else if (selectedItem == 5) {  // Continue
           lcd.clear();
           lcd.print("Continuing...");
-          delay(1000);
-          break;  // Exit the menu loop
+          delay(2000);
+          int apple =displayCuringParameters(tempValue,riseTime,holdTime,fallTime);
+          if(apple == 4)
+          {
+            lcd.clear();
+             lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("Starting curing");  // First row fixed text
+            //delay(1000);
+
+            // Start countdown in the second row
+            for (int i = 3; i >= 1; i--) {
+                lcd.setCursor(0, 1);  // Set the second row
+                lcd.print("Process in "); // Fixed text part
+                lcd.print(i);  // Countdown number
+                lcd.print(" sec");  // "sec" will stay
+                delay(1000);  // Wait for 1 second before changing the countdown number
+            }
+
+            // After countdown finishes, display "Started" message
+            controlTemperature(tempValue,riseTime,holdTime,fallTime);
+            lcd.clear();
+            lcd.print("curing completed");
+            delay(5000);
+            break;
+          }
+          if(apple == 6)
+          {
+            lcd.clear();
+            lcd.print("returning");
+            delay(2000);
+            break;
+          }
+          //delay(1000);
+          //break;  // Exit the menu loop
         }
       }
     }
   }
 }
+
+int displayCuringParameters(int finalTemp, int riseTime, int holdTime, int fallTime) {
+  unsigned long lastToggleTime = 0; // To track the last toggle time
+  const unsigned long toggleInterval = 2000; // 1-second interval
+  int messageIndex = 0; // Index to track which message to display
+
+  while (true) {
+    // Get the current time
+    unsigned long currentTime = millis();
+
+    // Check if it's time to toggle the message
+    if (currentTime - lastToggleTime >= toggleInterval) {
+      lastToggleTime = currentTime; // Update the last toggle time
+      lcd.clear(); // Clear the screen before updating the message
+
+      // Display the appropriate message based on the index
+      switch (messageIndex) {
+        case 0:
+          lcd.clear();
+          lcd.print("FINAL TEMP = ");
+          lcd.setCursor(0,1);
+          lcd.print(finalTemp);
+          lcd.print((char)0xDF); // Degree symbol
+          lcd.print("C");
+          break;
+
+        case 1:
+          lcd.clear();
+          lcd.print("RISE TIME = ");
+          lcd.setCursor(0,1);
+          lcd.print(riseTime);
+          lcd.print(" min");
+          if (riseTime >= 60) {
+            lcd.setCursor(8, 1);
+            lcd.print("(");
+            lcd.print(riseTime / 60);
+            lcd.print(" hr)");
+          }
+          break;
+
+        case 2:
+          lcd.clear();
+          lcd.print("HOLD TIME = ");
+          lcd.setCursor(0,1);
+          lcd.print(holdTime);
+          lcd.print(" min");
+          if (holdTime >= 60) {
+            lcd.setCursor(8, 1);
+            lcd.print("(");
+            lcd.print(holdTime / 60);
+            lcd.print(" hr)");
+          }
+          break;
+
+        case 3:
+          lcd.clear();
+          lcd.print("FALL TIME = ");
+          lcd.setCursor(0,1);
+          lcd.print(fallTime);
+          lcd.print(" min");
+          if (fallTime >= 60) {
+            lcd.setCursor(8, 1);
+            lcd.print("(");
+            lcd.print(fallTime / 60);
+            lcd.print(" hr)");
+          }
+          break;
+
+        case 4:
+          lcd.print("Press Enter to");
+          lcd.setCursor(0, 1);
+          lcd.print("Confirm");
+          break;
+      }
+
+      // Increment the message index and loop back to 0 if it exceeds 4
+      messageIndex = (messageIndex + 1) % 5;
+    }
+
+    // Check the button state
+    int buttonState = read_button(); // Check the button state
+
+    if (buttonState == 4) { // Enter button pressed
+      lcd.clear();
+      lcd.print("OK. Starting");
+      lcd.setCursor(0, 1);
+      lcd.print("Curing...");
+      delay(2000); // Optional display for 2 seconds
+      return(4); // Exit the function
+    } else if (buttonState == 6) { // Cancel button pressed
+      lcd.clear();
+      lcd.print("Operation");
+      lcd.setCursor(0, 1);
+      lcd.print("Terminated");
+      delay(2000); // Optional display for 2 seconds
+      return(6); // Exit the function
+    }
+  }
+}
+void saveToEEPROM() {
+  EEPROM.begin(EEPROM_SIZE); // Initialize EEPROM with defined size
+  
+  EEPROM.put(TEMP_ADDR, tempValue);  // Save tempValue
+  EEPROM.put(RISE_ADDR, riseTime);  // Save riseTime
+  EEPROM.put(HOLD_ADDR, holdTime);  // Save holdTime
+  EEPROM.put(FALL_ADDR, fallTime);  // Save fallTime
+
+  EEPROM.commit(); // Commit changes to EEPROM
+  Serial.println("Data saved to EEPROM");
+}
+
+void loadFromEEPROM() {
+  EEPROM.begin(EEPROM_SIZE); // Initialize EEPROM
+
+  EEPROM.get(TEMP_ADDR, tempValue);  // Load tempValue
+  EEPROM.get(RISE_ADDR, riseTime);  // Load riseTime
+  EEPROM.get(HOLD_ADDR, holdTime);  // Load holdTime
+  EEPROM.get(FALL_ADDR, fallTime);  // Load fallTime
+
+}
+
 
 // Function to update the menu display based on the selected item
 void updateMenuDisplay(int selectedItem) {
@@ -308,20 +688,21 @@ void updateMenuDisplay(int selectedItem) {
     // Print menu item, with degree symbol for the first item (Temp)
     if (menuIndex == 0) {
       lcd.print("1.Temp ");
-      lcd.print(tempValue, 2);  // Display the temperature value with 2 decimal places
+      lcd.print(tempValue);  // Display the temperature value with 2 decimal places
+
       lcd.print((char)0xDF);  // Add degree symbol for temperature
       lcd.print("C");        // Add the "C" symbol for Celsius
     } else if (menuIndex == 1) {
       lcd.print("2.Rise Tym ");
-      lcd.print(riseTime, 3);  // Display rise time with 3 digits
+      lcd.print(riseTime);  // Display rise time with 3 digits
       lcd.print("m");
     } else if (menuIndex == 2) {
       lcd.print("3.Hold Tym ");
-      lcd.print(holdTime, 3);  // Display hold time with 3 digits
+      lcd.print(holdTime);  // Display hold time with 3 digits
       lcd.print("m");
     } else if (menuIndex == 3) {
       lcd.print("4.Fall Tym ");
-      lcd.print(fallTime, 3);  // Display fall time with 3 digits
+      lcd.print(fallTime);  // Display fall time with 3 digits
       lcd.print("m");
     } else if (menuIndex == 4) {
       lcd.print("5.Return");
@@ -334,8 +715,11 @@ void updateMenuDisplay(int selectedItem) {
 // System failure handling
 void system_failure() {
     lcd.clear();
+    digitalWrite(heaterPin,LOW);
+    digitalWrite(fanPin,LOW);
+    call_buzzer(5,100,100,5,1);
     lcd.print("System Failure!");
-    delay(5000); // Show failure message and halt system
+    //delay(5000); // Show failure message and halt system
     while (true);
 }
 // Non-blocking temperature reading function
