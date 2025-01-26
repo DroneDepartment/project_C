@@ -147,7 +147,7 @@ void setup() {
   digitalWrite(heaterPin, LOW); // Turn off the heater initially
    pinMode(fanPin, OUTPUT);
   digitalWrite(fanPin, LOW); // Turn off the heater initially
-
+ 
 
 }
 
@@ -307,7 +307,8 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
   digitalWrite(fanPin, HIGH);      // Fan on initially (if required)
   lcd.clear();
   lcd.print("RISE");
-  call_buzzer(1, 300, 300, 4, 1); // Indicate start of RISE state
+  call_buzzer(1, 1500, 0, 1, 1); // for first state
+  //call_buzzer(1, 300, 300, 4, 1); // Indicate start of RISE state
 
   const float tempTolerance = 1.0; // Allowable tolerance in degrees
   bool heaterOn = false;
@@ -371,7 +372,8 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
           currentState = HOLD;
           lcd.clear();
           lcd.print("HOLD");
-          call_buzzer(1, 200, 200, 4, 1);
+          //call_buzzer(1, 200, 200, 4, 1);
+          call_buzzer(2,500,200,1,1); //
           lcd.clear();
           targetTemp = maxTemp; // Maintain max temperature during HOLD
           stateStartMillis = millis();
@@ -391,7 +393,7 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
           currentState = FALL;
           lcd.clear();
           lcd.print("FALL");
-          call_buzzer(1, 300, 300, 4, 3);
+          call_buzzer(3,500,200,1,1);// third state
           lcd.clear();
           stateStartMillis = millis();
         }
@@ -411,7 +413,7 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
           currentState = COMPLETE;
           lcd.clear();
           lcd.print("completed");
-          call_buzzer(1, 300, 300, 4, 4);
+           call_buzzer(4,100,100,4,10);
           lcd.clear();
         }
         break;
