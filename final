@@ -296,9 +296,9 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
     delay(10); // Give some time for the sensor to update the results
   }
 
-  // Now, safely retrieve the initial temperature from results[0]
-  float initialTemp = results[0];  // Get the current temperature from the sensor (results[0] should be set correctly now)
-  float targetTemp = initialTemp;  // Start the target temperature from the current temperature
+  // Retrieve the initial temperature from results[0]
+  float initialTemp = results[0];
+  float targetTemp = initialTemp;
   
   Serial.print("Initial Temp: ");
   Serial.println(initialTemp);
@@ -308,6 +308,9 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
   lcd.clear();
   lcd.print("RISE");
   call_buzzer(1, 300, 300, 4, 1); // Indicate start of RISE state
+
+  const float tempTolerance = 1.0; // Allowable tolerance in degrees
+  bool heaterOn = false;
 
   while (currentState != COMPLETE) {
     // Handle button inputs
@@ -356,15 +359,13 @@ void controlTemperature(int maxTemp, int riseTime, int holdTime, int fallTime) {
     // State handling
     switch (currentState) {
       case RISE: {
-        // Calculate the target temperature based on elapsed time in the RISE state
-        float progress = (float)elapsedMillis / (riseTime * 60 * 1000); // Progress from 0 to 1
-        targetTemp = initialTemp + progress * (maxTemp - initialTemp); // Increase from initial to maxTemp
-Serial.print("targetTemp: ");
-  Serial.println(targetTemp);
-  Serial.print("averageTemp: ");
-  Serial.println(results[0]);
-  //Serial.print("actualTemp: ");
-  //Serial.println(results[0]);
+        float progress = (float)elapsedMillis / (riseTime * 60 * 1000);
+        targetTemp = initialTemp + progress * (maxTemp - initialTemp);
+
+          Serial.print("targetTemp: ");
+          Serial.println(targetTemp);
+          Serial.print("averageTemp: ");
+           Serial.println(results[0]);
 
         if (elapsedMillis >= riseTime * 60 * 1000) {
           currentState = HOLD;
@@ -380,10 +381,12 @@ Serial.print("targetTemp: ");
 
       case HOLD:
         targetTemp = maxTemp; // Maintain max temperature
+
         Serial.print("targetTemp: ");
-  Serial.println(targetTemp);
-  Serial.print("averageTemp: ");
-  Serial.println(results[0]);
+        Serial.println(targetTemp);
+        Serial.print("averageTemp: ");
+        Serial.println(results[0]);
+
         if (elapsedMillis >= holdTime * 60 * 1000) {
           currentState = FALL;
           lcd.clear();
@@ -395,13 +398,14 @@ Serial.print("targetTemp: ");
         break;
 
       case FALL: {
-        // Calculate the target temperature during the FALL state
-        float progress = (float)elapsedMillis / (fallTime * 60 * 1000); // Progress from 0 to 1
-        targetTemp = maxTemp - progress * (maxTemp - initialTemp); // Decrease back to initialTemp
-               Serial.print("targetTemp: ");
-  Serial.println(targetTemp);
-  Serial.print("averageTemp: ");
-  Serial.println(results[0]);
+        float progress = (float)elapsedMillis / (fallTime * 60 * 1000);
+        targetTemp = maxTemp - progress * (maxTemp - initialTemp);
+
+      Serial.print("targetTemp: ");
+       Serial.println(targetTemp);
+        Serial.print("averageTemp: ");
+          Serial.println(results[0]);
+
 
         if (elapsedMillis >= fallTime * 60 * 1000) {
           currentState = COMPLETE;
@@ -410,7 +414,6 @@ Serial.print("targetTemp: ");
           call_buzzer(1, 300, 300, 4, 4);
           lcd.clear();
         }
-
         break;
       }
 
@@ -419,11 +422,14 @@ Serial.print("targetTemp: ");
     }
 
     // Simulate temperature using the sensor readings
-    if (read_temperature_non_blocking()) { // Non-blocking temperature reading
-      if (results[0] < targetTemp) {
-        digitalWrite(heaterPin, HIGH); // Heater on
-      } else if (results[0] > targetTemp) {
-        digitalWrite(heaterPin, LOW); // Heater off
+    if (read_temperature_non_blocking()) {
+      float currentTemp = results[0];
+      if (currentTemp < targetTemp - tempTolerance && !heaterOn) {
+        digitalWrite(heaterPin, HIGH); // Turn on heater
+        heaterOn = true;
+      } else if (currentTemp > targetTemp + tempTolerance && heaterOn) {
+        digitalWrite(heaterPin, LOW); // Turn off heater
+        heaterOn = false;
       }
     }
 
@@ -433,13 +439,13 @@ Serial.print("targetTemp: ");
 
       lcd.setCursor(0, 0);
       lcd.print("T1=");
-      lcd.print((int)results[1]); // Display T1
+      lcd.print((int)results[1]);
       lcd.print((char)0xDF);
       lcd.print("C ");
 
       lcd.setCursor(8, 0);
       lcd.print("T2=");
-      lcd.print((int)results[2]); // Display T2
+      lcd.print((int)results[2]);
       lcd.print((char)0xDF);
       lcd.print("C");
 
@@ -454,7 +460,7 @@ Serial.print("targetTemp: ");
       lcd.print("   ");
 
       lcd.setCursor(5, 1);
-      if (digitalRead(heaterPin) == HIGH) {
+      if (heaterOn) {
         lcd.print("H ");
       } else {
         lcd.print("  ");
@@ -472,6 +478,7 @@ Serial.print("targetTemp: ");
   digitalWrite(heaterPin, LOW);
   digitalWrite(fanPin, LOW);
 }
+
 
 
 void showMenu() {
